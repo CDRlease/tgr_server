@@ -1,0 +1,120 @@
+name: tgr-dist-release-verify
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to validate, for example v0.1.0
+        required: true
+        type: string
+
+jobs:
+  verify-and-dispatch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Resolve release metadata
+        id: meta
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          EVENT_URL: ${{ github.event.release.html_url }}
+          MANUAL_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            tag_name="$MANUAL_TAG"
+            release_url="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag_name}"
+          else
+            tag_name="$EVENT_TAG"
+            release_url="$EVENT_URL"
+          fi
+
+          component="${GITHUB_REPOSITORY#*/tgr_}"
+          echo "tag=$tag_name" >> "$GITHUB_OUTPUT"
+          echo "release_url=$release_url" >> "$GITHUB_OUTPUT"
+          echo "component=$component" >> "$GITHUB_OUTPUT"
+
+      - name: Validate smoke release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.meta.outputs.tag }}
+          EXPECTED_COMPONENT: ${{ steps.meta.outputs.component }}
+        run: |
+          set -euo pipefail
+          mkdir -p downloaded extracted
+
+          gh release download "${TAG_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern "manifest.json" \
+            --pattern "SHA256SUMS.txt" \
+            --dir downloaded \
+            --clobber
+
+          manifest_component="$(jq -r '.component' downloaded/manifest.json)"
+          manifest_mode="$(jq -r '.mode' downloaded/manifest.json)"
+          manifest_source_repo="$(jq -r '.sourceRepo' downloaded/manifest.json)"
+          zip_name="$(jq -r '.bundles[0].name' downloaded/manifest.json)"
+          validation_type="$(jq -r '.bundles[0].validation.type' downloaded/manifest.json)"
+          validation_path="$(jq -r '.bundles[0].validation.path' downloaded/manifest.json)"
+
+          case "$EXPECTED_COMPONENT" in
+            server) expected_source_repo="JiepengTan/tg_server" ;;
+            engine) expected_source_repo="JiepengTan/tg_engine" ;;
+            config) expected_source_repo="JiepengTan/tg_config" ;;
+            codegen) expected_source_repo="JiepengTan/tg_codegen" ;;
+            *)
+              echo "Unsupported component: $EXPECTED_COMPONENT" >&2
+              exit 1
+              ;;
+          esac
+
+          test "$manifest_mode" = "smoke"
+          test "$manifest_component" = "$EXPECTED_COMPONENT"
+          test "$manifest_source_repo" = "$expected_source_repo"
+          test "$validation_type" = "smoke-file"
+          test -n "$zip_name"
+          test -n "$validation_path"
+
+          gh release download "${TAG_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern "${zip_name}" \
+            --dir downloaded \
+            --clobber
+
+          (
+            cd downloaded
+            sha256sum -c SHA256SUMS.txt
+          )
+
+          unzip -oq "downloaded/${zip_name}" -d extracted
+          test -f "extracted/${validation_path}"
+
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG_NAME}" > downloaded/release.json
+          browser_url="$(jq -r --arg zipName "$zip_name" '.assets[] | select(.name == $zipName) | .browser_download_url' downloaded/release.json)"
+          test -n "$browser_url"
+          curl -fsSL -o /tmp/dist-smoke-anonymous-download.zip "${browser_url}"
+
+      - name: Dispatch acceptance to tg_client
+        env:
+          GH_TOKEN: ${{ secrets.CLIENT_DISPATCH_TOKEN }}
+          COMPONENT: ${{ steps.meta.outputs.component }}
+          TAG_NAME: ${{ steps.meta.outputs.tag }}
+          RELEASE_URL: ${{ steps.meta.outputs.release_url }}
+        run: |
+          set -euo pipefail
+          payload="$(jq -cn \
+            --arg component "$COMPONENT" \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg tag "$TAG_NAME" \
+            --arg release_url "$RELEASE_URL" \
+            '{event_type:"verify-dist-release", client_payload:{component:$component, repo:$repo, tag:$tag, release_url:$release_url}}')"
+
+          gh api "repos/JiepengTan/tg_client/dispatches" \
+            --method POST \
+            --input - <<<"${payload}"

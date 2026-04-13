@@ -1,0 +1,22 @@
+name: tgr-server-ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate-repo:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate repo files
+        run: |
+          set -euo pipefail
+          test -f README.md
+          test -f .github/workflows/repo-ci.yml
+          test -f .github/workflows/release-verify.yml
