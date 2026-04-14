@@ -10,12 +10,12 @@ checksums, and then notifies
 
 Current expected assets per tag:
 
-- `server-bin-linux-amd64.zip`
-- `server-bin-linux-arm64.zip`
-- `server-bin-darwin-amd64.zip`
-- `server-bin-darwin-arm64.zip`
-- `server-bin-windows-amd64.zip`
-- `server-bin-windows-arm64.zip`
+- `server-linux-amd64.zip`
+- `server-linux-arm64.zip`
+- `server-osx-amd64.zip`
+- `server-osx-arm64.zip`
+- `server-win-amd64.zip`
+- `server-win-arm64.zip`
 - `manifest.json`
 - `SHA256SUMS.txt`
 
@@ -23,6 +23,9 @@ Current manifest contract for `server` releases:
 
 - `mode` is `release`
 - `component` is `server`
+- each `bundles[]` entry uses `name=server-{os}-{arch}.zip`
+- each `bundles[]` entry uses `os=linux|osx|win`
+- each `bundles[]` entry uses `arch=amd64|arm64`
 - each `bundles[]` entry carries `name`, `os`, `arch`, and a
   `bundle-entry-exists` validation with required bundle paths
 

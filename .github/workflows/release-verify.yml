@@ -50,10 +50,22 @@ jobs:
           bundle_count="$(jq '.bundles | length' downloaded/manifest.json)"
 
           case "$EXPECTED_COMPONENT" in
-            server) expected_source_repo="JiepengTan/tg_server" ;;
-            engine) expected_source_repo="JiepengTan/tg_engine" ;;
-            config) expected_source_repo="JiepengTan/tg_config" ;;
-            codegen) expected_source_repo="JiepengTan/tg_codegen" ;;
+            server)
+              expected_source_repo="JiepengTan/tg_server"
+              expected_bundle_count=6
+              ;;
+            engine)
+              expected_source_repo="JiepengTan/tg_engine"
+              expected_bundle_count=1
+              ;;
+            config)
+              expected_source_repo="JiepengTan/tg_config"
+              expected_bundle_count=1
+              ;;
+            codegen)
+              expected_source_repo="JiepengTan/tg_codegen"
+              expected_bundle_count=6
+              ;;
             *)
               echo "Unsupported component: $EXPECTED_COMPONENT" >&2
               exit 1
@@ -63,7 +75,8 @@ jobs:
           test "$manifest_mode" = "release"
           test "$manifest_component" = "$EXPECTED_COMPONENT"
           test "$manifest_source_repo" = "$expected_source_repo"
-          test "$bundle_count" -gt 0
+          test "$bundle_count" -eq "$expected_bundle_count"
+          test "$(jq '[.bundles[].name] | unique | length' downloaded/manifest.json)" -eq "$bundle_count"
 
           mapfile -t bundle_names < <(jq -r '.bundles[].name' downloaded/manifest.json)
           for bundle_name in "${bundle_names[@]}"; do
@@ -93,6 +106,28 @@ jobs:
             validation_type="$(jq -r '.validation.type' <<<"$bundle_row")"
             extract_dir="extracted/${bundle_os}-${bundle_arch}"
 
+            case "$bundle_os" in
+              any)
+                test "$bundle_arch" = "any"
+                expected_bundle_name="${EXPECTED_COMPONENT}-any-any.zip"
+                ;;
+              linux|osx|win)
+                case "$bundle_arch" in
+                  amd64|arm64) ;;
+                  *)
+                    echo "Unsupported bundle arch: $bundle_arch" >&2
+                    exit 1
+                    ;;
+                esac
+                expected_bundle_name="${EXPECTED_COMPONENT}-${bundle_os}-${bundle_arch}.zip"
+                ;;
+              *)
+                echo "Unsupported bundle os: $bundle_os" >&2
+                exit 1
+                ;;
+            esac
+
+            test "$bundle_name" = "$expected_bundle_name"
             test "$validation_type" = "bundle-entry-exists"
             unzip -oq "downloaded/${bundle_name}" -d "$extract_dir"
 
