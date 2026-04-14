@@ -1,9 +1,6 @@
 name: tgr-dist-release-verify
 
 on:
-  release:
-    types:
-      - published
   workflow_dispatch:
     inputs:
       tag:
@@ -21,26 +18,17 @@ jobs:
       - name: Resolve release metadata
         id: meta
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          EVENT_TAG: ${{ github.event.release.tag_name }}
-          EVENT_URL: ${{ github.event.release.html_url }}
           MANUAL_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            tag_name="$MANUAL_TAG"
-            release_url="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag_name}"
-          else
-            tag_name="$EVENT_TAG"
-            release_url="$EVENT_URL"
-          fi
-
+          tag_name="$MANUAL_TAG"
+          release_url="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag_name}"
           component="${GITHUB_REPOSITORY#*/tgr_}"
           echo "tag=$tag_name" >> "$GITHUB_OUTPUT"
           echo "release_url=$release_url" >> "$GITHUB_OUTPUT"
           echo "component=$component" >> "$GITHUB_OUTPUT"
 
-      - name: Validate smoke release assets
+      - name: Validate mirrored release assets
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ steps.meta.outputs.tag }}
@@ -59,9 +47,7 @@ jobs:
           manifest_component="$(jq -r '.component' downloaded/manifest.json)"
           manifest_mode="$(jq -r '.mode' downloaded/manifest.json)"
           manifest_source_repo="$(jq -r '.sourceRepo' downloaded/manifest.json)"
-          zip_name="$(jq -r '.bundles[0].name' downloaded/manifest.json)"
-          validation_type="$(jq -r '.bundles[0].validation.type' downloaded/manifest.json)"
-          validation_path="$(jq -r '.bundles[0].validation.path' downloaded/manifest.json)"
+          bundle_count="$(jq '.bundles | length' downloaded/manifest.json)"
 
           case "$EXPECTED_COMPONENT" in
             server) expected_source_repo="JiepengTan/tg_server" ;;
@@ -74,31 +60,50 @@ jobs:
               ;;
           esac
 
-          test "$manifest_mode" = "smoke"
+          test "$manifest_mode" = "release"
           test "$manifest_component" = "$EXPECTED_COMPONENT"
           test "$manifest_source_repo" = "$expected_source_repo"
-          test "$validation_type" = "smoke-file"
-          test -n "$zip_name"
-          test -n "$validation_path"
+          test "$bundle_count" -gt 0
 
-          gh release download "${TAG_NAME}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --pattern "${zip_name}" \
-            --dir downloaded \
-            --clobber
+          mapfile -t bundle_names < <(jq -r '.bundles[].name' downloaded/manifest.json)
+          for bundle_name in "${bundle_names[@]}"; do
+            gh release download "${TAG_NAME}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern "${bundle_name}" \
+              --dir downloaded \
+              --clobber
+          done
+
+          if command -v sha256sum >/dev/null 2>&1; then
+            checksum_cmd=(sha256sum -c SHA256SUMS.txt)
+          else
+            checksum_cmd=(shasum -a 256 -c SHA256SUMS.txt)
+          fi
 
           (
             cd downloaded
-            sha256sum -c SHA256SUMS.txt
+            "${checksum_cmd[@]}"
           )
 
-          unzip -oq "downloaded/${zip_name}" -d extracted
-          test -f "extracted/${validation_path}"
-
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG_NAME}" > downloaded/release.json
-          browser_url="$(jq -r --arg zipName "$zip_name" '.assets[] | select(.name == $zipName) | .browser_download_url' downloaded/release.json)"
-          test -n "$browser_url"
-          curl -fsSL -o /tmp/dist-smoke-anonymous-download.zip "${browser_url}"
+          while IFS= read -r bundle_row; do
+            bundle_name="$(jq -r '.name' <<<"$bundle_row")"
+            bundle_os="$(jq -r '.os' <<<"$bundle_row")"
+            bundle_arch="$(jq -r '.arch' <<<"$bundle_row")"
+            validation_type="$(jq -r '.validation.type' <<<"$bundle_row")"
+            extract_dir="extracted/${bundle_os}-${bundle_arch}"
+
+            test "$validation_type" = "bundle-entry-exists"
+            unzip -oq "downloaded/${bundle_name}" -d "$extract_dir"
+
+            while IFS= read -r validation_path; do
+              test -f "${extract_dir}/${validation_path}"
+            done < <(jq -r '.validation.paths[]' <<<"$bundle_row")
+
+            browser_url="$(jq -r --arg zipName "$bundle_name" '.assets[] | select(.name == $zipName) | .browser_download_url' downloaded/release.json)"
+            test -n "$browser_url"
+            curl -fsSL -o "/tmp/${bundle_name}" "${browser_url}"
+          done < <(jq -c '.bundles[]' downloaded/manifest.json)
 
       - name: Dispatch acceptance to tg_client
         env:
