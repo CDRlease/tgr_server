@@ -9,7 +9,7 @@ on:
         type: string
 
 jobs:
-  verify-and-dispatch:
+  verify:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -22,10 +22,8 @@ jobs:
         run: |
           set -euo pipefail
           tag_name="$MANUAL_TAG"
-          release_url="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag_name}"
           component="${GITHUB_REPOSITORY#*/tgr_}"
           echo "tag=$tag_name" >> "$GITHUB_OUTPUT"
-          echo "release_url=$release_url" >> "$GITHUB_OUTPUT"
           echo "component=$component" >> "$GITHUB_OUTPUT"
 
       - name: Validate mirrored release assets
@@ -139,22 +137,3 @@ jobs:
             test -n "$browser_url"
             curl -fsSL -o "/tmp/${bundle_name}" "${browser_url}"
           done < <(jq -c '.bundles[]' downloaded/manifest.json)
-
-      - name: Dispatch acceptance to tg_client
-        env:
-          GH_TOKEN: ${{ secrets.CLIENT_DISPATCH_TOKEN }}
-          COMPONENT: ${{ steps.meta.outputs.component }}
-          TAG_NAME: ${{ steps.meta.outputs.tag }}
-          RELEASE_URL: ${{ steps.meta.outputs.release_url }}
-        run: |
-          set -euo pipefail
-          payload="$(jq -cn \
-            --arg component "$COMPONENT" \
-            --arg repo "$GITHUB_REPOSITORY" \
-            --arg tag "$TAG_NAME" \
-            --arg release_url "$RELEASE_URL" \
-            '{event_type:"verify-dist-release", client_payload:{component:$component, repo:$repo, tag:$tag, release_url:$release_url}}')"
-
-          gh api "repos/JiepengTan/tg_client/dispatches" \
-            --method POST \
-            --input - <<<"${payload}"
